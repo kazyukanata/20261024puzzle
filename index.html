@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Number Tower Balance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        * { user-select: none; -webkit-user-select: none; touch-action: none; }
+        body { font-family: 'Outfit', sans-serif; overflow: hidden; background: linear-gradient(135deg, #0f172a 0%, #020617 100%); }
+        canvas { display: block; width: 100%; height: 100%; }
+    </style>
+</head>
+<body class="w-screen h-screen flex flex-col justify-between items-center relative overflow-hidden">
+    <div class="absolute top-4 left-0 right-0 z-10 flex flex-col items-center pointer-events-none px-4">
+        <div class="flex items-center justify-between w-full max-w-md bg-slate-900/90 backdrop-blur-md p-3 rounded-2xl border border-slate-700/60 shadow-2xl">
+            <div id="p1-card" class="flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-cyan-500/20 border border-cyan-400/50 scale-105 shadow-lg shadow-cyan-500/10">
+                <div class="w-4 h-4 rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]"></div>
+                <span class="font-bold text-cyan-200 text-sm md:text-base tracking-wide">PLAYER 1</span>
+            </div>
+            <div class="text-xs font-black text-slate-400 bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700">VS</div>
+            <div id="p2-card" class="flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-slate-800/50 border border-transparent opacity-60">
+                <span class="font-bold text-rose-200 text-sm md:text-base tracking-wide">PLAYER 2</span>
+                <div class="w-4 h-4 rounded-full bg-rose-500 shadow-[0_0_10px_#f43f5e]"></div>
+            </div>
+        </div>
+        <div id="status-banner" class="mt-3 bg-slate-900/90 border border-slate-700/80 rounded-full px-5 py-2 flex items-center gap-3 shadow-xl transition-all">
+            <span id="turn-instruction" class="text-xs md:text-sm text-slate-300 font-semibold">ドラッグで位置調整・↻回転、放して積む</span>
+            <div id="next-num-badge" class="w-9 h-9 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center text-xl shadow-md border border-white/20">?</div>
+        </div>
+    </div>
+
+    <div id="canvas-container" class="w-full h-full relative flex-1">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <button id="rotate-btn" class="fixed bottom-6 right-5 z-20 px-5 py-3 rounded-2xl bg-indigo-600/95 border border-indigo-300/50 text-white font-black shadow-xl active:scale-95">
+        ↻ 回転
+    </button>
+
+    <div id="game-over-modal" class="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center hidden opacity-0 transition-opacity duration-300 p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6 md:p-8 max-w-sm w-full text-center shadow-2xl flex flex-col items-center gap-4">
+            <div id="winner-icon" class="w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl">🏆</div>
+            <div>
+                <h2 id="winner-title" class="text-2xl font-black text-white tracking-wider">PLAYER 1 WINS!</h2>
+                <p id="winner-reason" class="text-slate-400 text-sm mt-1">相手がタワーを崩しました！</p>
+            </div>
+            <button id="restart-btn" class="w-full py-3.5 mt-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-bold text-lg shadow-lg shadow-cyan-500/25 active:scale-95 transition-all">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+<script>
+const { Engine, Bodies, Composite, Body, Events, Query } = Matter;
+const STEP_MS = 1000 / 120;
+const MAX_FALL_SPEED = 8;
+const MAX_SPIN = 0.12;
+
+function sevenSeg(segs, cx = 0, w = 52, h = 88, t = 16) {
+    const hx = w / 2 - t / 2, hy = h / 2 - t / 2;
+    const vLen = h / 2 + t / 2;
+    const upY = -h / 2 + vLen / 2, loY = h / 2 - vLen / 2;
+    const defs = {
+        a: { x: 0, y: -hy, w, h: t }, g: { x: 0, y: 0, w, h: t },
+        d: { x: 0, y: hy, w, h: t },
+        b: { x: hx, y: upY, w: t, h: vLen }, f: { x: -hx, y: upY, w: t, h: vLen },
+        c: { x: hx, y: loY, w: t, h: vLen }, e: { x: -hx, y: loY, w: t, h: vLen }
+    };
+    return segs.split('').map(k => ({ ...defs[k], x: defs[k].x + cx }));
+}
+
+const NUMBER_DEFINITIONS = {
+    1: { color: '#38bdf8', weight: 1, parts: [{ x: 0, y: 0, w: 20, h: 88 }, { x: -15, y: -28, w: 16, h: 34, a: Math.PI / 4 }, { x: 0, y: 40, w: 56, h: 16 }] },
+    2: { color: '#818cf8', weight: 2, parts: sevenSeg('abged') },
+    3: { color: '#c084fc', weight: 3, parts: sevenSeg('abgcd') },
+    4: { color: '#f472b6', weight: 4, parts: sevenSeg('fgbc') },
+    5: { color: '#fb7185', weight: 5, parts: sevenSeg('afgcd') },
+    6: { color: '#fb923c', weight: 6, parts: sevenSeg('afgecd') },
+    7: { color: '#facc15', weight: 7, parts: [{ x: 0, y: -36, w: 56, h: 16 }, { x: 8, y: 4, w: 18, h: 84, a: Math.PI / 11 }] },
+    8: { color: '#4ade80', weight: 8, parts: sevenSeg('abcdefg') },
+    9: { color: '#2dd4bf', weight: 9, parts: sevenSeg('abcdfg') },
+    0: { color: '#a855f7', weight: 0, parts: sevenSeg('abcdef') }
+};
+
+let canvas, ctx, engine, world;
+let currentTurnPlayer = 1, currentNum = 1, activeBlock = null;
+let isHolding = false, gameActive = true, ground, pedestal, turnToken = 0;
+let dragOffset = { x: 0, y: 0 };
+let settledBlocks = [], groundedBodies = [], dampBodies = [];
+const TOP_SCREEN_Y = 170;
+let dropY = 170, camScale = 1, camTarget = 1, basePosY = 0;
+let lastTime = 0, accumulator = 0;
+
+function toWorldX(clientX) {
+    const cx = canvas.width / 2;
+    return cx + (clientX - cx) / camScale;
+}
+
+function updateCameraTarget() {
+    let towerTop = pedestal.bounds.min.y;
+    settledBlocks.forEach(b => { if (b.bounds.min.y < towerTop) towerTop = b.bounds.min.y; });
+    const CLEARANCE = 120;
+    dropY = Math.min(TOP_SCREEN_Y, towerTop - CLEARANCE);
+    let s = (basePosY - TOP_SCREEN_Y) / (basePosY - dropY);
+    s = Math.min(1, s);
+    const MIN_SCALE = 0.25;
+    if (s < MIN_SCALE) {
+        s = MIN_SCALE;
+        dropY = basePosY - (basePosY - TOP_SCREEN_Y) / s;
+    }
+    camTarget = s;
+}
+
+window.addEventListener('load', () => {
+    initCanvas();
+    initPhysics();
+    setupEvents();
+    startNewTurn();
+    requestAnimationFrame(gameLoop);
+});
+
+function initCanvas() {
+    canvas = document.getElementById('gameCanvas');
+    ctx = canvas.getContext('2d');
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+}
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    basePosY = canvas.height - 130;
+    if (pedestal) Body.setPosition(pedestal, { x: canvas.width / 2, y: basePosY });
+    if (ground) Body.setPosition(ground, { x: canvas.width / 2, y: canvas.height + 60 });
+}
+
+function initPhysics() {
+    engine = Engine.create({
+        enableSleeping: true,
+        gravity: { x: 0, y: 1.0 },
+        positionIterations: 10,
+        velocityIterations: 8
+    });
+    world = engine.world;
+
+    ground = Bodies.rectangle(canvas.width / 2, canvas.height + 60, 3000, 100, {
+        isStatic: true, restitution: 0, friction: 1, label: 'ground'
+    });
+    basePosY = canvas.height - 130;
+    // 土台全体ではなく、上面の薄い平面だけを衝突判定に使う。
+    // 側面や角に引っかかって数字が跳ねるのを防ぐ。
+    pedestal = Bodies.rectangle(canvas.width / 2, basePosY - 16, 190, 6, {
+        isStatic: true, friction: 1,
+        frictionStatic: 3, restitution: 0, slop: 0.05, label: 'pedestal'
+    });
+    Composite.add(world, [ground, pedestal]);
+
+    Events.on(engine, 'collisionStart', event => {
+        event.pairs.forEach(pair => {
+            const { bodyA, bodyB } = pair;
+            if (bodyA === ground || bodyB === ground) {
+                const other = bodyA === ground ? bodyB : bodyA;
+                const parent = other.parent || other;
+                if (parent === pedestal) return;
+                if (!groundedBodies.includes(parent)) groundedBodies.push(parent);
+                if (gameActive) {
+                    triggerGameOver(currentTurnPlayer === 1 ? 2 : 1, 'ブロックが台から落ちました！');
+                }
+            } else {
+                const a = bodyA.parent || bodyA;
+                const b = bodyB.parent || bodyB;
+
+                // 土台上面との接触では速度を後から変更しない。
+                // 数字同士がぶつかった場合だけ勢いを少し抑える。
+                if (bodyA === pedestal || bodyB === pedestal || a === pedestal || b === pedestal) return;
+                [a, b].forEach(block => {
+                    if (block.isStatic || block === activeBlock) return;
+                    if (!dampBodies.includes(block)) dampBodies.push(block);
+                });
+            }
+        });
+    });
+}
+
+function createNumberBlock(num, x, y) {
+    const def = NUMBER_DEFINITIONS[num];
+    const parts = def.parts.map(p => {
+        const rect = Bodies.rectangle(x + p.x, y + p.y, p.w, p.h);
+        if (p.a) Body.rotate(rect, p.a);
+        return rect;
+    });
+    const block = Body.create({
+        parts,
+        friction: 0.9,
+        frictionStatic: 3,
+        frictionAir: 0.01,
+        restitution: 0,
+        slop: 0.4,
+        sleepThreshold: Infinity
+    });
+    Body.setDensity(block, 0.001 * (0.7 + def.weight * 0.08));
+    block.numValue = num;
+    block.color = def.color;
+    block.isPlaced = false;
+    return block;
+}
+
+function updateTurnUI() {
+    const p1 = document.getElementById('p1-card');
+    const p2 = document.getElementById('p2-card');
+    if (currentTurnPlayer === 1) {
+        p1.className = "flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-cyan-500/20 border border-cyan-400/50 scale-105 shadow-lg shadow-cyan-500/10";
+        p2.className = "flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-slate-800/50 border border-transparent opacity-60";
+    } else {
+        p2.className = "flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-rose-500/20 border border-rose-400/50 scale-105 shadow-lg shadow-rose-500/10";
+        p1.className = "flex items-center gap-2 px-4 py-2 rounded-xl transition-all duration-300 bg-slate-800/50 border border-transparent opacity-60";
+    }
+}
+
+function startNewTurn() {
+    if (!gameActive) return;
+    currentNum = Math.floor(Math.random() * 10);
+    const badge = document.getElementById('next-num-badge');
+    badge.innerText = currentNum;
+    badge.style.backgroundColor = NUMBER_DEFINITIONS[currentNum].color;
+    updateTurnUI();
+    const spawnX = canvas.width / 2;
+    updateCameraTarget();
+    activeBlock = createNumberBlock(currentNum, spawnX, dropY);
+    Body.setStatic(activeBlock, true);
+    activeBlock.parts.forEach(p => { p.isSensor = true; });
+    Composite.add(world, activeBlock);
+    isHolding = false;
+}
+
+function setupEvents() {
+    const handleStart = e => {
+        if (!gameActive || !activeBlock || isHolding) return;
+        isHolding = true;
+        dragOffset = { x: activeBlock.position.x - toWorldX(e.clientX), y: 0 };
+    };
+    const handleMove = e => {
+        if (!gameActive || !isHolding || !activeBlock) return;
+        let targetX = toWorldX(e.clientX) + dragOffset.x;
+        targetX = Math.min(Math.max(targetX, toWorldX(60)), toWorldX(canvas.width - 60));
+        Body.setPosition(activeBlock, { x: targetX, y: dropY });
+    };
+    const handleEnd = () => {
+        if (!gameActive || !isHolding || !activeBlock) return;
+        releaseBlock();
+    };
+    window.addEventListener('pointerdown', handleStart);
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleEnd);
+    window.addEventListener('pointercancel', handleEnd);
+    document.getElementById('restart-btn').addEventListener('click', resetGame);
+    document.getElementById('rotate-btn').addEventListener('pointerdown', e => {
+        e.preventDefault();
+        if (!gameActive || !isHolding || !activeBlock) return;
+        Body.rotate(activeBlock, Math.PI / 12);
+    });
+    window.addEventListener('keydown', e => {
+        if ((e.key === 'r' || e.key === 'R' || e.key === 'ArrowUp') &&
+            gameActive && isHolding && activeBlock) {
+            e.preventDefault();
+            Body.rotate(activeBlock, Math.PI / 12);
+        }
+    });
+}
+
+function releaseBlock() {
+    const block = activeBlock;
+    isHolding = false;
+    activeBlock = null;
+    // 落下開始時の位置補正では、土台との重なりを判定対象から外す。
+    // 土台との物理衝突自体は残すので、数字を土台に積むことはできる。
+    const others = Composite.allBodies(world).filter(
+        b => b !== block && b !== ground && b !== pedestal
+    );
+    const checkParts = block.parts.length > 1 ? block.parts.slice(1) : [block];
+    const isOverlapping = () => checkParts.some(p => Query.collides(p, others).length > 0);
+    let guard = 0;
+    while (isOverlapping() && guard++ < 200) Body.translate(block, { x: 0, y: -3 });
+    if (guard > 0) Body.translate(block, { x: 0, y: -1 });
+
+    block.parts.forEach(p => { p.isSensor = false; });
+    Body.setStatic(block, false);
+    Matter.Sleeping.set(block, false);
+    block.sleepCounter = 0;
+    block.sleepThreshold = 40;
+    Body.setVelocity(block, { x: 0, y: 0 });
+    Body.setAngularVelocity(block, 0);
+    block.isPlaced = true;
+    settledBlocks.push(block);
+    waitForSettle();
+}
+
+function waitForSettle() {
+    const token = turnToken, startT = performance.now();
+    let calmSince = null;
+    const poll = () => {
+        if (!gameActive || token !== turnToken) return;
+        const now = performance.now();
+        const moving = settledBlocks.some(b => b.speed > 0.1 || b.angularSpeed > 0.004);
+        if (moving) calmSince = null;
+        else if (calmSince === null) calmSince = now;
+        const elapsed = now - startT;
+        const calm = calmSince !== null && now - calmSince > 400;
+        if ((calm && elapsed > 700) || elapsed > 5000) endTurn();
+        else setTimeout(poll, 80);
+    };
+    setTimeout(poll, 250);
+}
+
+function endTurn() {
+    if (!gameActive) return;
+    currentTurnPlayer = currentTurnPlayer === 1 ? 2 : 1;
+    startNewTurn();
+}
+
+function triggerGameOver(winnerPlayer, reason) {
+    if (!gameActive) return;
+    gameActive = false;
+    if (activeBlock) isHolding = false;
+    const modal = document.getElementById('game-over-modal');
+    const title = document.getElementById('winner-title');
+    const reasonText = document.getElementById('winner-reason');
+    const icon = document.getElementById('winner-icon');
+    title.innerText = `PLAYER ${winnerPlayer} WINS!`;
+    reasonText.innerText = reason;
+    if (winnerPlayer === 1) {
+        title.className = "text-2xl font-black text-cyan-400 tracking-wider";
+        icon.className = "w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl bg-cyan-500/20 border border-cyan-400/50 text-cyan-300";
+    } else {
+        title.className = "text-2xl font-black text-rose-400 tracking-wider";
+        icon.className = "w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl bg-rose-500/20 border border-rose-400/50 text-rose-300";
+    }
+    modal.classList.remove('hidden');
+    setTimeout(() => modal.classList.add('opacity-100'), 10);
+}
+
+function resetGame() {
+    const modal = document.getElementById('game-over-modal');
+    modal.classList.remove('opacity-100');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+    turnToken++;
+    settledBlocks.forEach(block => Composite.remove(world, block));
+    if (activeBlock) Composite.remove(world, activeBlock);
+    settledBlocks = [];
+    groundedBodies = [];
+    dampBodies = [];
+    activeBlock = null;
+    isHolding = false;
+    currentTurnPlayer = 1;
+    gameActive = true;
+    startNewTurn();
+}
+
+/*
+ * 地面に触れたブロックを固定する。
+ * 衝突後に弾き飛ばされるのを避けるため、地面に接触したら
+ * 位置・速度・回転をリセットして静的ボディにする。
+ */
+function freezeGroundBlocks() {
+    const groundTop = ground.bounds.min.y;
+    settledBlocks.forEach(block => {
+        if (block.isStatic) return;
+        if (block.bounds.max.y >= groundTop - 2) {
+            const overlap = block.bounds.max.y - groundTop;
+            if (overlap > 0) Body.translate(block, { x: 0, y: -overlap });
+            Body.setVelocity(block, { x: 0, y: 0 });
+            Body.setAngularVelocity(block, 0);
+            Body.setStatic(block, true);
+            if (!groundedBodies.includes(block)) groundedBodies.push(block);
+        }
+    });
+}
+
+// 土台に触れた数字は、物理演算の反発が次フレームに伝わる前に完全固定する。
+// これにより、土台に着地した瞬間の跳ね・横滑り・回転を防ぐ。
+function freezePedestalBlocks() {
+    const pedestalTop = pedestal.bounds.min.y;
+    settledBlocks.forEach(block => {
+        if (block.isStatic) return;
+        const parts = block.parts.length > 1 ? block.parts.slice(1) : [block];
+        const touchesPedestal = parts.some(part => Query.collides(part, [pedestal]).length > 0);
+        if (!touchesPedestal) return;
+
+        // 少しでも台の上面に入り込んでいたら、上面まで戻してから固定する。
+        const overlap = block.bounds.max.y - pedestalTop;
+        if (overlap > 0 && overlap < 30) {
+            Body.translate(block, { x: 0, y: -overlap });
+        }
+        Body.setVelocity(block, { x: 0, y: 0 });
+        Body.setAngularVelocity(block, 0);
+        Body.setStatic(block, true);
+    });
+}
+
+function gameLoop(time) {
+    if (!lastTime) lastTime = time;
+    const dt = Math.min(time - lastTime, 50);
+    lastTime = time;
+    accumulator += dt;
+
+    while (accumulator >= STEP_MS) {
+        freezeGroundBlocks();
+        Engine.update(engine, STEP_MS);
+
+        // 接触判定は物理更新直後に行い、土台に触れたブロックを即固定する。
+        freezePedestalBlocks();
+        freezeGroundBlocks();
+        accumulator -= STEP_MS;
+
+        if (dampBodies.length) {
+            dampBodies.forEach(b => {
+                if (b.isStatic || b.isSleeping) return;
+                const v = b.velocity;
+                Body.setVelocity(b, { x: v.x * 0.45, y: v.y * 0.45 });
+                Body.setAngularVelocity(b, b.angularVelocity * 0.45);
+                b.calmSteps = 8;
+            });
+            dampBodies = [];
+        }
+
+        settledBlocks.forEach(b => {
+            if (b.isStatic || b.isSleeping) return;
+            const v = b.velocity;
+            let vy = v.y, changed = false;
+            const upLimit = (b.calmSteps > 0) ? 0 : -0.08;
+            if (b.calmSteps > 0) b.calmSteps--;
+            if (vy < upLimit) { vy = 0; changed = true; }
+            if (vy > MAX_FALL_SPEED) { vy = MAX_FALL_SPEED; changed = true; }
+            if (changed) Body.setVelocity(b, { x: v.x, y: vy });
+            if (Math.abs(b.angularVelocity) > MAX_SPIN) {
+                Body.setAngularVelocity(b, Math.sign(b.angularVelocity) * MAX_SPIN);
+            }
+        });
+
+        // 以前の接触イベントで登録された地面ブロックも確実に固定
+        if (groundedBodies.length) {
+            groundedBodies.forEach(b => {
+                if (!b.isStatic) {
+                    Body.setVelocity(b, { x: 0, y: 0 });
+                    Body.setAngularVelocity(b, 0);
+                    Body.setStatic(b, true);
+                }
+            });
+            groundedBodies = [];
+        }
+    }
+
+    if (gameActive) {
+        const pedestalTop = pedestal.bounds.min.y;
+        for (const b of settledBlocks) {
+            if (b.bounds.min.y > pedestalTop) {
+                triggerGameOver(currentTurnPlayer === 1 ? 2 : 1, 'ブロックが台から落ちました！');
+                break;
+            }
+        }
+    }
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#0f172a');
+    gradient.addColorStop(1, '#020617');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    camScale += (camTarget - camScale) * (1 - Math.exp(-dt / 120));
+    if (Math.abs(camTarget - camScale) < 0.0005) camScale = camTarget;
+
+    drawBackgroundGrid();
+    ctx.save();
+    ctx.translate(canvas.width / 2, basePosY);
+    ctx.scale(camScale, camScale);
+    ctx.translate(-canvas.width / 2, -basePosY);
+    drawGround();
+    drawPedestal();
+    drawBlocks();
+    drawGuideLine();
+    ctx.restore();
+    requestAnimationFrame(gameLoop);
+}
+
+function drawBackgroundGrid() {
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.12)';
+    ctx.lineWidth = 1;
+    const gridSize = 45;
+    for (let x = 0; x < canvas.width; x += gridSize) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+    }
+    for (let y = 0; y < canvas.height; y += gridSize) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+    }
+}
+
+function drawGround() {
+    const top = ground.bounds.min.y, left = ground.bounds.min.x;
+    const width = ground.bounds.max.x - ground.bounds.min.x;
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(left, top, width, 600);
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(left, top, width, 4);
+}
+
+function drawPedestal() {
+    const pos = { x: pedestal.position.x, y: pedestal.position.y + 16 }, w = 190, h = 38;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath(); ctx.ellipse(pos.x, pos.y + 30, w / 2 + 12, 14, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#334155';
+    ctx.beginPath(); ctx.roundRect(pos.x - w / 2, pos.y - h / 2, w, h, 8); ctx.fill();
+    ctx.fillStyle = '#475569';
+    ctx.beginPath(); ctx.roundRect(pos.x - w / 2, pos.y - h / 2, w, 8, [8, 8, 0, 0]); ctx.fill();
+    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(pos.x - w / 2, pos.y - h / 2, w, h, 8); ctx.stroke();
+}
+
+function drawBlocks() {
+    Composite.allBodies(world).forEach(body => {
+        if (body === ground || body === pedestal) return;
+        const parts = body.parts.length > 1 ? body.parts.slice(1) : body.parts;
+        const tracePath = () => {
+            ctx.beginPath();
+            parts.forEach(part => {
+                const v = part.vertices;
+                ctx.moveTo(v[0].x, v[0].y);
+                for (let i = 1; i < v.length; i++) ctx.lineTo(v[i].x, v[i].y);
+                ctx.closePath();
+            });
+        };
+        ctx.save();
+        ctx.lineJoin = 'round';
+        tracePath();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 4;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.shadowColor = 'transparent';
+        ctx.fillStyle = body.color || '#38bdf8';
+        tracePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(body.position.x, body.position.y, 3.5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+    });
+}
+
+function drawGuideLine() {
+    if (!activeBlock || !isHolding) return;
+    const pos = activeBlock.position;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(pos.x, pedestal.bounds.min.y);
+    ctx.stroke();
+    ctx.restore();
+}
+</script>
+</body>
+</html>
